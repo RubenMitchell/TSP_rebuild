@@ -11,6 +11,9 @@ from call_back_classes import IncumbentCallback, CustomCutCallback, HeuristicsCa
 
 def solve(mdl, warmstart = False, inc = False, c_cut = False, mincut = False, comb = False, heu = False):
     
+    if warmstart:
+        mdl.build_warmstart()
+    
     if inc: 
         cb_incumbent = mdl.model_instance.register_callback(IncumbentCallback)
         cb_incumbent.mdl = mdl

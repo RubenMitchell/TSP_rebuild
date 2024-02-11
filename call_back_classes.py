@@ -11,6 +11,7 @@ from docplex.mp.callbacks.cb_mixin import ConstraintCallbackMixin
 import numpy as np
 
 from heuristic_functions import heuristics
+#%% Exponential decay for heuristic calling
 
 #%% Incumbent Callback:
 
@@ -29,6 +30,7 @@ class IncumbentCallback(ConstraintCallbackMixin,LazyConstraintCallback):
         subtours = get_subtours_from_int_sol(edges)
         if len(subtours) > 0:
             for j in subtours:
+                #print(j)
                 g = (sum(self.mdl.x[i] for i in j) <= len(j)-1)
                 cpx_ct = self.linear_ct_to_cplex(g)
                 self.add(cpx_ct[0],cpx_ct[1],cpx_ct[2])
@@ -100,18 +102,24 @@ class CustomCutCallback(ConstraintCallbackMixin,UserCutCallback):
 
 #%% Heuristic callback 
 class HeuristicsCallback(ConstraintCallbackMixin, HeuristicCallback):
-    
+
+
     def __init__(self, env):
         HeuristicCallback.__init__(self, env)
         ConstraintCallbackMixin.__init__(self)
         self.counter = 0
+        self.limit = 1
+        self.a = 1.5
+        self.b = 0.05
+        self.base = 3
     
     
     def __call__(self):
         self.counter += 1
-        #print("running")
-        if self.counter == 1:
+        if self.counter == self.limit:
             self.counter = 0
+            self.limit = round(self.a/(self.b*self.get_MIP_relative_gap()*100)+self.base)
+            print("limit set to "+ str(self.limit))
             x_sol = self.make_solution_from_vars(self.mdl.x.values())
             adj = [[] for i in self.mdl.data.V]
             arcs = []
@@ -127,7 +135,7 @@ class HeuristicsCallback(ConstraintCallbackMixin, HeuristicCallback):
             for i in path:
                 adj[i[1]].append(i[0])
                 adj[i[0]].append(i[1])
-            heu.greedy_tsp_with_partial_edges(path, get_connected(adj))
+            heu.greedy_with_partial_edges(path, get_connected(adj))
              
             heu.two_opt()
             #print("big out")
@@ -143,12 +151,11 @@ class HeuristicsCallback(ConstraintCallbackMixin, HeuristicCallback):
                         weights.append(1)
                     else:
                         weights.append(0)
-                self.set_solution([c, weights])#, cost)
-                print("Incumbent updated with cost = "+ str(cost))# + " and bi = " + str(self.get_incumbent_objective_value()))
-# =============================================================================
-#             else:
-#                 print("failed")
-# =============================================================================
+                self.set_solution([c, weights], cost)
+                print("Incumbent updated with cost = " + str(cost))
+            else:
+                print("failed")
+
 
 #%% Functions to find properties of current solutions 
 
@@ -242,99 +249,65 @@ def clean(edges, n):
  
 def add_comb_inequality(self):
     solutions = self.get_values()
-    values = {(i,j): 0 for (i,j) in self.mdl.x}
     frac_edges = []
     frac_adj = [[] for i in self.mdl.data.V]
     teeth_potentials = []
     j = 0
     for i in self.mdl.x:
-        values[i] = solutions[j]
-        if 0.999 > solutions[j] > -0:
+        if 0.999999 > solutions[j] > 0.000001:
             frac_edges.append(i)
             frac_adj[i[0]].append(i[1])
             frac_adj[i[1]].append(i[0])
-        elif solutions[j] > 0.999:
+        elif solutions[j] > 0.999999:
             teeth_potentials.append(i)
         j = j+1
     comps = [x for x in get_connected(frac_adj) if len(x)>2]
-    comp_edge = []
+    comp_edges = []
     for i in comps:
+        holder = []
         for j in frac_edges:
             if any(x in i for x in j):
-                comp_edge.append(j)
-                break
-    
-    
-    def dfs_cycle(u, p, visited, parent, cycles):
-        if visited[u] == 2:
-            return
-        if visited[u] == 1:
-            v = []
-            cur = p
-            v.append(cur)
-            while cur != u:
-                cur = parent[cur]
-                v.append(cur)
-            cycles.append(v)
-            return
-        parent[u] = p
-        visited[u] = 1
-        for v in frac_adj[u]:
-            if v == parent[u]:
-                continue
-            dfs_cycle(v, u, visited, parent, cycles)
-        visited[u] = 2
-    
-    cycles = []
-    
-    for i in comp_edge:
-        holder = []
-        dfs_cycle(i[0], i[1], [0 for i in self.mdl.data.V], [0 for i in self.mdl.data.V], holder)
-        sorted_cycles = sorted(holder, key=len, reverse=True)
-        cycles.append(sorted_cycles)
+                holder.append(j)
+        comp_edges.append(holder)
             
-    def find_teeth(cycle_comps, teeth):
+    def find_teeth(handle, teeth):
         used = []
         found_teeth = []
-        for i in cycle_comps: 
-            for j in teeth:
-                if i == j[0] and j[1] not in used:
-                    used.append(j[1])
-                    if j not in found_teeth:
-                        found_teeth.append(j) 
-                    break
-                elif i == j[1] and j[0] not in used:
-                    used.append(j[0])
-                    if j not in found_teeth:
-                        found_teeth.append(j) 
-                    break 
-        return found_teeth
-    
-    for i in range(len(cycles)):
-       
-        for j in range(len(cycles[i])):
-            
-                teeth = find_teeth(cycles[i][j], teeth_potentials)
-                
-                if len(teeth)%2 == 1 and len(teeth)> 2:
-                    lhs = sum(values[tooth] for tooth in teeth)
-                    edges = []
-                    for q in range(len(cycles[i][j])):
-                        #for s in range(q+1,len(cycles[i][j])):
-                                
-                        mi = min(cycles[i][j][q],cycles[i][j][q-1])
-                        ma = max(cycles[i][j][q],cycles[i][j][q-1])
-                        #if (mi,ma) in frac_edges:
-                        lhs += values[mi,ma]
-                        edges.append((mi,ma))
-                    rhs = len(cycles[i][j]) + (len(teeth)-1)/2
-                    if lhs > rhs:
-                        expr = sum(self.mdl.x[z] for z in teeth) + sum(self.mdl.x[c] for c in edges) <= rhs
-                        cons = self.linear_ct_to_cplex(expr)
-                        self.add(cons[0],cons[1],cons[2])
-                        break
-        
-                       
+        add_vs = []
+        for hv in handle: 
+            for tooth in teeth:
+                if hv in tooth:
+                    other = tooth[1] if hv == tooth[0] else tooth[0]
+                    if other not in handle:
+                        if other not in used:
+                            found_teeth.append(tooth)
+                            used.append(other)
+                            break
+                        else:
+                            add_vs.append(other)
+                            for i in found_teeth:
+                                if other in i: 
+                                    found_teeth.remove(i)
+                                    break
+                        
+                    
+        return found_teeth, add_vs
+                        
+    for i in range(len(comps)):
+        teeth, add_vs = find_teeth(comps[i], teeth_potentials)
+        if len(teeth)%2 == 1 and len(teeth) > 2:
+            edges = []
+            comps[i] += add_vs
+            rhs = len(comps[i]) + (len(teeth)-1)/2
+            for v in range(len(comps[i])-1):
+                for q in range(v+1, len(comps[i])):
+                    x = comps[i][v]
+                    y = comps[i][q]
+                    edges.append((min(x,y), max(x,y)))
+            expr = sum(self.mdl.x[z] for z in teeth) + sum(self.mdl.x[c] for c in edges) <= rhs
+            cons = self.linear_ct_to_cplex(expr)
+            self.add(cons[0],cons[1],cons[2])
+
                          
 
     
